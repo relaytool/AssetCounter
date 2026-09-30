@@ -68,6 +68,15 @@ textarea{min-height:90px;resize:vertical}
 .dialog{background:#fff;max-width:720px;width:100%;max-height:90vh;overflow:auto;border-radius:18px;padding:15px}
 .dialog img{width:100%;max-height:60vh;object-fit:contain;background:#f2f4f7;border-radius:12px}
 .hr{height:1px;background:var(--line);margin:14px 0}
+
+.asset-type-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.asset-type-option{position:relative}
+.asset-type-option input{position:absolute;opacity:0;pointer-events:none}
+.asset-type-option label{display:flex;align-items:center;justify-content:center;min-height:48px;padding:10px 12px;border:2px solid #d0d5dd;border-radius:12px;background:#fff;color:var(--ink);font-size:13px;font-weight:800;text-align:center;cursor:pointer}
+.asset-type-option input:checked+label{border-color:var(--accent);background:#eff6ff;color:#1d4ed8}
+.asset-type-option label:active{transform:scale(.99)}
+.asset-type-add{border:2px dashed #98a2b3!important;background:#f8fafc!important;color:#475467!important}
+@media(max-width:600px){.asset-type-grid{grid-template-columns:1fr 1fr}.asset-type-option label{min-height:52px}}
 .small-note{font-size:11px;color:var(--muted)}
 </style>
 </head>
@@ -129,9 +138,9 @@ textarea{min-height:90px;resize:vertical}
     <p class="sub">Use this while walking around. Each save records a count observation.</p>
     <div class="panel">
       <div class="form-grid">
-        <div class="field">
-          <label>Asset type</label>
-          <select id="assetTypeSelect"></select>
+        <div class="field full">
+          <label>Asset type <span class="muted">Choose one</span></label>
+          <div id="assetTypeSelect" class="asset-type-grid" role="radiogroup" aria-label="Asset type"></div>
         </div>
         <div class="field">
           <label>Quantity found</label>
@@ -174,7 +183,7 @@ textarea{min-height:90px;resize:vertical}
     <div class="panel">
       <div class="notice">Photos are stored locally in your browser's IndexedDB. Do not clear this site's storage or browser data unless you have exported a backup.</div>
       <div class="actions">
-        <button class="btn primary" id="exportData">Export Backup</button>
+        <button class="btn primary" id="exportData">Export / Share Backup</button>
         <label class="btn secondary" style="display:inline-flex;align-items:center">Import Backup<input id="importData" type="file" accept=".json,application/json" hidden></label>
         <button class="btn danger" id="clearAll">Delete All Data</button>
       </div>
@@ -191,7 +200,7 @@ textarea{min-height:90px;resize:vertical}
       <form id="pumpForm">
         <input type="hidden" id="pumpId">
         <div class="form-grid">
-          <div class="field"><label>Number</label><input id="pumpNumber" readonly></div>
+          <div class="field"><label>Pump truck ID / number</label><input id="pumpNumber" placeholder="Enter your pump truck ID" autocomplete="off" required></div>
           <div class="field"><label>Pump truck type</label><input id="pumpType" placeholder="e.g. Manual, Electric, PPT"></div>
           <div class="field"><label>Condition</label><select id="pumpCondition"><option>Good</option><option>Needs Repair</option><option>Damaged</option><option>Out of Service</option></select></div>
           <div class="field"><label>Area / zone</label><input id="pumpArea" placeholder="e.g. Inbound, Zone B"></div>
@@ -291,11 +300,7 @@ function getImage(id){
 }
 function removeImage(id){ return id ? dbDelete(STORE_IMAGES,id) : Promise.resolve(); }
 
-function nextPumpNumber(){
-  let max=0;
-  for(const p of pumps){ const m=String(p.number||"").match(/^PT-(\d+)$/i); if(m) max=Math.max(max,Number(m[1])||0); }
-  return `PT-${String(max+1).padStart(4,"0")}`;
-}
+function nextPumpNumber(){ return ""; }
 
 function switchTab(name){
   document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id==="view-"+name));
@@ -312,7 +317,7 @@ async function openPumpForm(id=null){
   const p=id ? pumps.find(x=>x.id===id) : null;
   $("pumpDialogTitle").textContent=p?"Edit Pump Truck":"Add Pump Truck";
   $("pumpId").value=p?.id||"";
-  $("pumpNumber").value=p?.number||nextPumpNumber();
+  $("pumpNumber").value=p?.number||"";
   $("pumpType").value=p?.type||"";
   $("pumpCondition").value=p?.condition||"Good";
   $("pumpArea").value=p?.area||"";
@@ -327,10 +332,14 @@ async function savePump(e){
   e.preventDefault();
   try{
     const old=editingPumpId ? pumps.find(x=>x.id===editingPumpId) : null;
+    const number=$("pumpNumber").value.trim();
+    if(!number){toast("Enter a pump truck ID");$("pumpNumber").focus();return}
+    const duplicate=pumps.some(x=>x.id!==old?.id && String(x.number||"").trim().toLowerCase()===number.toLowerCase());
+    if(duplicate){toast("That pump truck ID already exists");$("pumpNumber").focus();return}
     let imageId=old?.imageId||null;
     if(tempPumpImage){ if(imageId) await removeImage(imageId); imageId=await saveImage(tempPumpImage); }
     const record={
-      id:old?.id||uid(), number:$("pumpNumber").value.trim(), type:$("pumpType").value.trim()||"Unspecified",
+      id:old?.id||uid(), number, type:$("pumpType").value.trim()||"Unspecified",
       condition:$("pumpCondition").value, area:$("pumpArea").value.trim(), tags:tags($("pumpTags").value),
       notes:$("pumpNotes").value.trim(), imageId, createdAt:old?.createdAt||now(), updatedAt:now()
     };
@@ -394,21 +403,34 @@ function renderDashboard(){
   $("assetTotals").innerHTML=Object.keys(totals).length?Object.entries(totals).sort((a,b)=>b[1]-a[1]).map(([t,n])=>`<div class="list-row"><div><b>${esc(t)}</b></div><div><b>${n}</b></div></div>`).join(""):'<div class="empty">No asset counts yet.</div>';
 }
 
-function renderAssetTypeSelect(){
-  $("assetTypeSelect").innerHTML=assetTypes.map(t=>`<option>${esc(t)}</option>`).join("") + '<option value="__new">+ Add new asset type…</option>';
+function getSelectedAssetType(){
+  const selected=document.querySelector('input[name="assetType"]:checked');
+  return selected ? selected.value : "";
 }
-function maybeNewType(){
-  if($("assetTypeSelect").value!=="__new")return;
+function renderAssetTypeSelect(){
+  const box=$("assetTypeSelect");
+  box.innerHTML=assetTypes.map((t,i)=>`
+    <div class="asset-type-option">
+      <input type="radio" id="asset-type-${i}" name="assetType" value="${esc(t)}">
+      <label for="asset-type-${i}">${esc(t)}</label>
+    </div>`).join("") + `
+    <div class="asset-type-option">
+      <button type="button" id="addAssetType" class="asset-type-add" style="width:100%;min-height:52px;border-radius:12px;padding:10px 12px;font-weight:800">＋ Add asset type</button>
+    </div>`;
+  $("addAssetType").onclick=addNewAssetType;
+}
+function addNewAssetType(){
   const t=prompt("New asset type:");
-  if(t&&t.trim()){
-    const v=t.trim();if(!assetTypes.some(x=>x.toLowerCase()===v.toLowerCase()))assetTypes.push(v);
-    $("assetTypeSelect").value=v;saveState().then(renderAssetTypeSelect);
-  }else $("assetTypeSelect").selectedIndex=0;
+  if(!t || !t.trim()) return;
+  const v=t.trim();
+  if(assetTypes.some(x=>x.toLowerCase()===v.toLowerCase())){toast("That asset type already exists");return}
+  assetTypes.push(v);
+  saveState().then(()=>{renderAssetTypeSelect(); const radios=[...document.querySelectorAll('input[name="assetType"]')]; const r=radios.find(x=>x.value===v); if(r)r.checked=true;});
 }
 
 async function saveAssetCount(){
-  const type=$("assetTypeSelect").value;
-  if(!type||type==="__new"){toast("Choose an asset type");return}
+  const type=getSelectedAssetType();
+  if(!type){toast("Choose an asset type");return}
   const qty=Math.max(1,Number($("assetQty").value)||1);
   try{
     let imageId=null;if(tempAssetImage)imageId=await saveImage(tempAssetImage);
@@ -416,7 +438,7 @@ async function saveAssetCount(){
     await saveState(); clearAssetForm(); renderAll(); toast(`${qty} × ${type} counted`);
   }catch(err){console.error(err);toast("Could not save asset count")}
 }
-function clearAssetForm(){$("assetQty").value=1;$("assetArea").value="";$("assetTags").value="";$("assetNotes").value="";$("assetPhoto").value="";$("assetPreview").style.display="none";tempAssetImage=null}
+function clearAssetForm(){document.querySelectorAll('input[name="assetType"]').forEach(r=>r.checked=false);$("assetQty").value=1;$("assetArea").value="";$("assetTags").value="";$("assetNotes").value="";$("assetPhoto").value="";$("assetPreview").style.display="none";tempAssetImage=null}
 async function deleteAssetRecord(id){
   const r=assetRecords.find(x=>x.id===id);if(!r||!confirm("Delete this asset count record?"))return;
   if(r.imageId)await removeImage(r.imageId);assetRecords=assetRecords.filter(x=>x.id!==id);await saveState();renderAll();toast("Asset count deleted");
@@ -440,11 +462,34 @@ function renderAssetRecords(){
 
 async function exportBackup(){
   const pumpCopy=pumps.map(p=>({...p})), assetCopy=assetRecords.map(r=>({...r}));
-  // Images are included as base64 so the backup is self contained.
   for(const p of pumpCopy)if(p.imageId){const blob=await dbGet(STORE_IMAGES,p.imageId);p.imageData=blob?await blobToData(blob):null}
   for(const r of assetCopy)if(r.imageId){const blob=await dbGet(STORE_IMAGES,r.imageId);r.imageData=blob?await blobToData(blob):null}
   const payload={version:1,exportedAt:now(),pumps:pumpCopy,assets:assetCopy,assetTypes:[...assetTypes]};
-  const blob=new Blob([JSON.stringify(payload)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`warehouse-register-${new Date().toISOString().slice(0,10)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  const json=JSON.stringify(payload);
+  const filename=`warehouse-register-${new Date().toISOString().slice(0,10)}.json`;
+  const blob=new Blob([json],{type:"application/json"});
+
+  // Phones: use the native Share sheet when available, so iPhone/Android can
+  // save the backup to Files/Drive/etc. Desktop browsers use a normal download.
+  if(navigator.share && navigator.canShare){
+    const file=new File([blob],filename,{type:"application/json"});
+    try{
+      if(navigator.canShare({files:[file]})){
+        await navigator.share({title:"Warehouse Register Backup",text:"Warehouse Register data backup",files:[file]});
+        toast("Backup ready to share");
+        return;
+      }
+    }catch(err){
+      if(err?.name==="AbortError") return;
+      console.warn("Native share failed, falling back to download",err);
+    }
+  }
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;a.download=filename;a.rel="noopener";
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),3000);
+  toast("Backup downloaded");
 }
 function blobToData(blob){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=()=>rej(r.error);r.readAsDataURL(blob)})}
 async function dataToBlob(data){const res=await fetch(data);return res.blob()}
@@ -478,7 +523,7 @@ function bind(){
   $("closePump").onclick=closePumpForm;$("cancelPump").onclick=closePumpForm;$("pumpForm").onsubmit=savePump;
   $("pumpSearch").oninput=renderPumps;$("pumpFilter").onchange=renderPumps;
   $("closeDetail").onclick=()=>$("detailDialog").style.display="none";
-  $("assetTypeSelect").onchange=maybeNewType;$("assetMinus").onclick=()=>{$("assetQty").value=Math.max(1,Number($("assetQty").value||1)-1)};
+  $("assetMinus").onclick=()=>{$("assetQty").value=Math.max(1,Number($("assetQty").value||1)-1)};
   $("assetPlus").onclick=()=>{$("assetQty").value=Number($("assetQty").value||1)+1};
   $("saveAssetCount").onclick=saveAssetCount;$("resetAssetForm").onclick=clearAssetForm;$("assetSearch").oninput=renderAssetRecords;$("refreshAssets").onclick=renderAssetRecords;
   $("exportData").onclick=()=>exportBackup().catch(e=>{console.error(e);toast("Export failed")});
